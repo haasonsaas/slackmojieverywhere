@@ -2,9 +2,10 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import Foundation
+import ServiceManagement
 import SlackmojiCore
 
-private enum EmojiAliasStore {
+enum EmojiAliasStore {
     private static let bundledAliasesFile = "slack_emoji_aliases"
     private static let customAliasesFile = "custom_aliases.json"
     private static let appSupportFolder = "SlackmojiEverywhere"
@@ -36,6 +37,51 @@ private enum EmojiAliasStore {
         }
 
         return fileURL
+    }
+
+    static func customAliasesURL() -> URL? {
+        ensureCustomAliasesFileExists()
+    }
+
+    static func readCustomAliasesJSONString() throws -> String {
+        guard let fileURL = ensureCustomAliasesFileExists() else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let data = try Data(contentsOf: fileURL)
+        let aliases = try JSONDecoder().decode([String: String].self, from: data)
+        let normalized = normalizedAliases(from: aliases)
+        let formatted = try formattedJSONData(from: normalized)
+
+        guard var json = String(data: formatted, encoding: .utf8) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+
+        if !json.hasSuffix("\n") {
+            json.append("\n")
+        }
+
+        return json
+    }
+
+    static func saveCustomAliasesJSONString(_ jsonString: String) throws {
+        guard let fileURL = ensureCustomAliasesFileExists() else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        guard let inputData = jsonString.data(using: .utf8) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+
+        let aliases = try JSONDecoder().decode([String: String].self, from: inputData)
+        let normalized = normalizedAliases(from: aliases)
+
+        var formatted = try formattedJSONData(from: normalized)
+        if formatted.last != 0x0A {
+            formatted.append(0x0A)
+        }
+
+        try formatted.write(to: fileURL, options: [.atomic])
     }
 
     private static func bundledAliases() -> [String: String] {
@@ -77,7 +123,11 @@ private enum EmojiAliasStore {
         return normalized
     }
 
-    private static func customAliasesFileURL() -> URL? {
+    private static func formattedJSONData(from aliases: [String: String]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: aliases, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    static func customAliasesFileURL() -> URL? {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
@@ -101,14 +151,21 @@ private final class GlobalTypingMonitor {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var typedBuffer = ""
-    private let maxBufferSize = 160
-    private var suppressUntil = Date.distantPast
+    private let maxBufferSize = 220
+    private let injectedEventMarker: Int64 = 0x534D4A59
     private var aliases = EmojiAliasStore.loadAliases()
+    private var appFilterMode: AppFilterMode = .off
+    private var appFilterBundleIDs = Set<String>()
 
     var onReplacement: ((String, String) -> Void)?
 
     func reloadAliases() {
         aliases = EmojiAliasStore.loadAliases()
+    }
+
+    func updateFiltering(mode: AppFilterMode, bundleIDs: [String]) {
+        appFilterMode = mode
+        appFilterBundleIDs = Set(bundleIDs.map { $0.lowercased() })
     }
 
     func start() -> Bool {
@@ -166,7 +223,12 @@ private final class GlobalTypingMonitor {
             return Unmanaged.passUnretained(event)
         }
 
-        if Date() < suppressUntil {
+        if event.getIntegerValueField(.eventSourceUserData) == injectedEventMarker {
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard shouldProcessCurrentContext() else {
+            typedBuffer.removeAll(keepingCapacity: true)
             return Unmanaged.passUnretained(event)
         }
 
@@ -177,6 +239,7 @@ private final class GlobalTypingMonitor {
     private func processKeyDown(_ event: CGEvent) {
         let flags = event.flags
         if flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate) {
+            typedBuffer.removeAll(keepingCapacity: true)
             return
         }
 
@@ -186,6 +249,17 @@ private final class GlobalTypingMonitor {
                 typedBuffer.removeLast()
             }
             return
+        }
+
+        switch keyCode {
+        case Int64(kVK_Return), Int64(kVK_Tab), Int64(kVK_Escape), Int64(kVK_Space):
+            typedBuffer.removeAll(keepingCapacity: true)
+            return
+        case Int64(kVK_LeftArrow), Int64(kVK_RightArrow), Int64(kVK_UpArrow), Int64(kVK_DownArrow):
+            typedBuffer.removeAll(keepingCapacity: true)
+            return
+        default:
+            break
         }
 
         guard let text = event.unicodeText, !text.isEmpty else {
@@ -239,8 +313,6 @@ private final class GlobalTypingMonitor {
     private func injectReplacement(removingCharacters count: Int, replacement: String) {
         guard count > 0 else { return }
 
-        suppressUntil = Date().addingTimeInterval(0.2)
-
         for _ in 0..<count {
             postKey(keyCode: CGKeyCode(kVK_Delete))
         }
@@ -256,6 +328,9 @@ private final class GlobalTypingMonitor {
         else {
             return
         }
+
+        keyDown.setIntegerValueField(.eventSourceUserData, value: injectedEventMarker)
+        keyUp.setIntegerValueField(.eventSourceUserData, value: injectedEventMarker)
 
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
@@ -273,10 +348,72 @@ private final class GlobalTypingMonitor {
             return
         }
 
+        keyDown.setIntegerValueField(.eventSourceUserData, value: injectedEventMarker)
+        keyUp.setIntegerValueField(.eventSourceUserData, value: injectedEventMarker)
         keyDown.keyboardSetUnicodeString(stringLength: codeUnits.count, unicodeString: &codeUnits)
         keyUp.keyboardSetUnicodeString(stringLength: codeUnits.count, unicodeString: &codeUnits)
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
+    }
+
+    private func shouldProcessCurrentContext() -> Bool {
+        guard !isFocusedElementSecureInput() else { return false }
+
+        let currentBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased()
+
+        switch appFilterMode {
+        case .off:
+            return true
+        case .allowlist:
+            guard let currentBundleID else { return false }
+            return appFilterBundleIDs.contains(currentBundleID)
+        case .denylist:
+            guard let currentBundleID else { return true }
+            return !appFilterBundleIDs.contains(currentBundleID)
+        }
+    }
+
+    private func isFocusedElementSecureInput() -> Bool {
+        let systemWideElement = AXUIElementCreateSystemWide()
+        var focusedObject: CFTypeRef?
+
+        let focusedResult = AXUIElementCopyAttributeValue(
+            systemWideElement,
+            "AXFocusedUIElement" as CFString,
+            &focusedObject
+        )
+
+        guard focusedResult == .success,
+              let focusedObject,
+              CFGetTypeID(focusedObject) == AXUIElementGetTypeID()
+        else {
+            return false
+        }
+
+        let focusedElement = focusedObject as! AXUIElement
+
+        var protectedValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(focusedElement, "AXValueProtected" as CFString, &protectedValue) == .success,
+           let isProtected = protectedValue as? Bool,
+           isProtected {
+            return true
+        }
+
+        var subroleValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(focusedElement, "AXSubrole" as CFString, &subroleValue) == .success,
+           let subrole = subroleValue as? String,
+           subrole == "AXSecureTextField" {
+            return true
+        }
+
+        var roleValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(focusedElement, "AXRole" as CFString, &roleValue) == .success,
+           let role = roleValue as? String,
+           role == "AXSecureTextField" {
+            return true
+        }
+
+        return false
     }
 
 }
@@ -299,11 +436,15 @@ private extension CGEvent {
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let monitor = GlobalTypingMonitor()
+    private let settingsStore = AppSettingsStore.shared
+
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let enableItem = NSMenuItem(title: "Enable Emoji Expansion", action: #selector(toggleEnabled), keyEquivalent: "")
+    private let preferencesItem = NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
     private let accessibilityItem = NSMenuItem(title: "Open Accessibility Settings…", action: #selector(openAccessibilitySettings), keyEquivalent: "")
     private let customAliasesItem = NSMenuItem(title: "Open Custom Aliases…", action: #selector(openCustomAliasesFile), keyEquivalent: "")
     private let reloadAliasesItem = NSMenuItem(title: "Reload Aliases", action: #selector(reloadAliases), keyEquivalent: "")
+    private var preferencesWindowController: PreferencesWindowController?
 
     private var isEnabled = true {
         didSet { updateMenuState() }
@@ -312,6 +453,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = EmojiAliasStore.ensureCustomAliasesFileExists()
         monitor.reloadAliases()
+        monitor.updateFiltering(mode: settingsStore.appFilterMode, bundleIDs: settingsStore.appFilterBundleIDs)
+
+        if settingsStore.launchAtLoginEnabled {
+            try? SMAppService.mainApp.register()
+        }
+
         setupMenuBar()
 
         monitor.onReplacement = { [weak self] _, emoji in
@@ -344,6 +491,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         statusItem.button?.title = "😄"
 
         enableItem.target = self
+        preferencesItem.target = self
         accessibilityItem.target = self
         customAliasesItem.target = self
         reloadAliasesItem.target = self
@@ -351,6 +499,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(enableItem)
+        menu.addItem(preferencesItem)
+        menu.addItem(.separator())
         menu.addItem(accessibilityItem)
         menu.addItem(customAliasesItem)
         menu.addItem(reloadAliasesItem)
@@ -415,13 +565,29 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     @objc
     private func openCustomAliasesFile() {
-        guard let fileURL = EmojiAliasStore.ensureCustomAliasesFileExists() else { return }
+        guard let fileURL = EmojiAliasStore.customAliasesURL() else { return }
         NSWorkspace.shared.open(fileURL)
     }
 
     @objc
     private func reloadAliases() {
         monitor.reloadAliases()
+    }
+
+    @objc
+    private func openPreferences() {
+        if preferencesWindowController == nil {
+            let controller = PreferencesWindowController()
+            controller.onAliasesUpdated = { [weak self] in
+                self?.monitor.reloadAliases()
+            }
+            controller.onFilterUpdated = { [weak self] mode, bundleIDs in
+                self?.monitor.updateFiltering(mode: mode, bundleIDs: bundleIDs)
+            }
+            preferencesWindowController = controller
+        }
+
+        preferencesWindowController?.present()
     }
 
     @objc

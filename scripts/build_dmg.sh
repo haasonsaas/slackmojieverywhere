@@ -3,7 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="SlackmojiEverywhere"
-VERSION="${1:-0.1.0}"
+VERSION="${1:-dev}"
+
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.haasonsaas.slackmojierrywhere}"
+MINIMUM_SYSTEM_VERSION="${MINIMUM_SYSTEM_VERSION:-13.0}"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+APPLE_NOTARY_KEYCHAIN_PROFILE="${APPLE_NOTARY_KEYCHAIN_PROFILE:-}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
 
 DIST_DIR="$ROOT_DIR/dist"
 STAGING_DIR="$DIST_DIR/dmg"
@@ -13,7 +19,9 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_PATH="$DIST_DIR/${APP_NAME}-${VERSION}.dmg"
 
-swift build --package-path "$ROOT_DIR" -c release
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  swift build --package-path "$ROOT_DIR" -c release
+fi
 
 if [[ -L "$ROOT_DIR/.build/release" ]]; then
   RELEASE_DIR="$(cd "$ROOT_DIR/.build/release" && pwd)"
@@ -38,6 +46,11 @@ do
   fi
 done
 
+if [[ -z "$RESOURCE_BUNDLE_PATH" ]]; then
+  echo "Expected resource bundle was not found in $RELEASE_DIR" >&2
+  exit 1
+fi
+
 rm -rf "$STAGING_DIR"
 rm -f "$DMG_PATH"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
@@ -45,9 +58,7 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
-if [[ -n "$RESOURCE_BUNDLE_PATH" ]]; then
-  cp -R "$RESOURCE_BUNDLE_PATH" "$APP_BUNDLE/"
-fi
+cp -R "$RESOURCE_BUNDLE_PATH" "$APP_BUNDLE/"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,7 +70,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>
   <string>${APP_NAME}</string>
   <key>CFBundleIdentifier</key>
-  <string>com.haasonsaas.slackmojierrywhere</string>
+  <string>${BUNDLE_IDENTIFIER}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -71,7 +82,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleVersion</key>
   <string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
+  <string>${MINIMUM_SYSTEM_VERSION}</string>
   <key>LSUIElement</key>
   <true/>
   <key>NSPrincipalClass</key>
@@ -79,6 +90,10 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if [[ -n "$CODESIGN_IDENTITY" ]]; then
+  codesign --force --deep --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+fi
 
 ln -sfn /Applications "$STAGING_DIR/Applications"
 
@@ -88,5 +103,14 @@ hdiutil create \
   -ov \
   -format UDZO \
   "$DMG_PATH" >/dev/null
+
+if [[ -n "$CODESIGN_IDENTITY" ]]; then
+  codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$DMG_PATH"
+fi
+
+if [[ -n "$APPLE_NOTARY_KEYCHAIN_PROFILE" ]]; then
+  xcrun notarytool submit "$DMG_PATH" --keychain-profile "$APPLE_NOTARY_KEYCHAIN_PROFILE" --wait
+  xcrun stapler staple "$DMG_PATH"
+fi
 
 echo "DMG created at: $DMG_PATH"
