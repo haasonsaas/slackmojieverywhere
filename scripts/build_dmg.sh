@@ -46,7 +46,7 @@ cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
 if [[ -n "$RESOURCE_BUNDLE_PATH" ]]; then
-  cp -R "$RESOURCE_BUNDLE_PATH" "$RESOURCES_DIR/"
+  cp -R "$RESOURCE_BUNDLE_PATH" "$APP_BUNDLE/"
 fi
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
