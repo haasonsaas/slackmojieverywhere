@@ -7,12 +7,9 @@ enum AppFilterMode: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .off:
-            return "Off"
-        case .allowlist:
-            return "Allow List"
-        case .denylist:
-            return "Deny List"
+        case .off: return "Off"
+        case .allowlist: return "Allow List"
+        case .denylist: return "Deny List"
         }
     }
 }
@@ -32,27 +29,18 @@ final class AppSettingsStore {
     private init() {}
 
     var launchAtLoginEnabled: Bool {
-        get {
-            defaults.bool(forKey: Keys.launchAtLoginEnabled)
-        }
-        set {
-            defaults.set(newValue, forKey: Keys.launchAtLoginEnabled)
-        }
+        get { defaults.bool(forKey: Keys.launchAtLoginEnabled) }
+        set { defaults.set(newValue, forKey: Keys.launchAtLoginEnabled) }
     }
 
     var appFilterMode: AppFilterMode {
         get {
             guard let raw = defaults.string(forKey: Keys.appFilterMode),
                   let mode = AppFilterMode(rawValue: raw)
-            else {
-                return .off
-            }
-
+            else { return .off }
             return mode
         }
-        set {
-            defaults.set(newValue.rawValue, forKey: Keys.appFilterMode)
-        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.appFilterMode) }
     }
 
     var appFilterBundleIDs: [String] {
@@ -60,34 +48,27 @@ final class AppSettingsStore {
             guard let values = defaults.array(forKey: Keys.appFilterBundleIDs) as? [String] else {
                 return []
             }
-
             return normalizeBundleIDs(values)
         }
-        set {
-            defaults.set(normalizeBundleIDs(newValue), forKey: Keys.appFilterBundleIDs)
-        }
+        set { defaults.set(normalizeBundleIDs(newValue), forKey: Keys.appFilterBundleIDs) }
     }
 
     func normalizeBundleIDs(_ bundleIDs: [String]) -> [String] {
         var seen = Set<String>()
         var normalized: [String] = []
-
         for value in bundleIDs {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !trimmed.isEmpty else { continue }
-
             if seen.insert(trimmed).inserted {
                 normalized.append(trimmed)
             }
         }
-
         return normalized
     }
 
     func parseBundleIDs(from text: String) -> [String] {
         let separators = CharacterSet(charactersIn: ",\n")
-        let rawValues = text.components(separatedBy: separators)
-        return normalizeBundleIDs(rawValues)
+        return normalizeBundleIDs(text.components(separatedBy: separators))
     }
 
     func bundleIDsText(from bundleIDs: [String]) -> String {
