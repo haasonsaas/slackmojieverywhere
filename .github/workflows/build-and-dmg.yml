@@ -1,0 +1,36 @@
+name: Build and DMG
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-package:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+
+      - name: Test (if configured)
+        run: |
+          if grep -q "\\.testTarget" Package.swift; then
+            swift test
+          else
+            echo "No Swift test target configured; skipping tests."
+          fi
+
+      - name: Build DMG
+        run: ./scripts/build_dmg.sh "ci-${{ github.run_number }}"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SlackmojiEverywhere-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
