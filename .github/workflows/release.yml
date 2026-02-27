@@ -11,6 +11,13 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    env:
+      APPLE_DEVELOPER_ID_CERT_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+      APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+      APPLE_DEVELOPER_ID_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+      APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+      APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+      APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,10 +34,7 @@ jobs:
 
       - name: Set up signing keychain (optional)
         id: keychain
-        if: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 != '' && secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD != '' }}
-        env:
-          APPLE_DEVELOPER_ID_CERT_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
-          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        if: ${{ env.APPLE_DEVELOPER_ID_CERT_P12 != '' && env.APPLE_DEVELOPER_ID_CERT_PASSWORD != '' }}
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/release-signing.keychain-db"
           KEYCHAIN_PASSWORD="release-keychain-password"
@@ -48,11 +52,7 @@ jobs:
 
       - name: Configure notarytool credentials (optional)
         id: notary
-        if: ${{ secrets.APPLE_NOTARY_APPLE_ID != '' && secrets.APPLE_NOTARY_TEAM_ID != '' && secrets.APPLE_NOTARY_APP_PASSWORD != '' }}
-        env:
-          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
-          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
-          APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+        if: ${{ env.APPLE_NOTARY_APPLE_ID != '' && env.APPLE_NOTARY_TEAM_ID != '' && env.APPLE_NOTARY_APP_PASSWORD != '' }}
         run: |
           PROFILE_NAME="slackmoji-notary"
           xcrun notarytool store-credentials "$PROFILE_NAME" \
@@ -69,7 +69,7 @@ jobs:
 
       - name: Build DMG
         env:
-          CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+          CODESIGN_IDENTITY: ${{ env.APPLE_DEVELOPER_ID_APPLICATION }}
           APPLE_NOTARY_KEYCHAIN_PROFILE: ${{ steps.notary.outputs.profile }}
         run: ./scripts/build_dmg.sh "${{ steps.version.outputs.value }}"
 
