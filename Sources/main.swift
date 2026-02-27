@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import Foundation
+import SlackmojiCore
 
 private enum EmojiAliasStore {
     private static let bundledAliasesFile = "slack_emoji_aliases"
@@ -211,7 +212,7 @@ private final class GlobalTypingMonitor {
             return
         }
 
-        if isAllowedAliasScalar(scalar) {
+        if EmojiAliasMatcher.isAllowedAliasScalar(scalar) {
             typedBuffer.append(character)
             trimBufferIfNeeded()
             return
@@ -228,30 +229,7 @@ private final class GlobalTypingMonitor {
     }
 
     private func attemptReplacementIfNeeded() {
-        guard typedBuffer.last == ":" else { return }
-
-        let withoutClosingColon = typedBuffer.dropLast()
-        var bestMatch: (alias: String, replacement: String)?
-
-        var index = withoutClosingColon.startIndex
-        while index < withoutClosingColon.endIndex {
-            defer { index = withoutClosingColon.index(after: index) }
-
-            guard withoutClosingColon[index] == ":" else { continue }
-
-            let aliasStart = withoutClosingColon.index(after: index)
-            let alias = String(withoutClosingColon[aliasStart...]).lowercased()
-
-            guard !alias.isEmpty, alias.count <= 80 else { continue }
-            guard isValidAlias(alias) else { continue }
-            guard let replacement = aliases[alias] else { continue }
-
-            if bestMatch == nil || alias.count > bestMatch!.alias.count {
-                bestMatch = (alias, replacement)
-            }
-        }
-
-        guard let match = bestMatch else { return }
+        guard let match = EmojiAliasMatcher.bestMatch(in: typedBuffer, aliases: aliases) else { return }
 
         injectReplacement(removingCharacters: match.alias.count + 2, replacement: match.replacement)
         typedBuffer.removeAll(keepingCapacity: true)
@@ -301,45 +279,6 @@ private final class GlobalTypingMonitor {
         keyUp.post(tap: .cghidEventTap)
     }
 
-    private func isAllowedAliasScalar(_ scalar: UnicodeScalar) -> Bool {
-        guard scalar.value < 128 else { return false }
-
-        switch scalar.value {
-        case 48...57, 65...90, 97...122:
-            return true
-        case 43, 45, 95:
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func isValidAlias(_ alias: String) -> Bool {
-        let scalars = Array(alias.unicodeScalars)
-        guard !scalars.isEmpty else { return false }
-
-        var index = 0
-        while index < scalars.count {
-            let scalar = scalars[index]
-
-            if isAllowedAliasScalar(scalar) {
-                index += 1
-                continue
-            }
-
-            if scalar.value == 58 {
-                guard index + 1 < scalars.count, scalars[index + 1].value == 58 else {
-                    return false
-                }
-                index += 2
-                continue
-            }
-
-            return false
-        }
-
-        return true
-    }
 }
 
 private extension CGEvent {

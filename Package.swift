@@ -13,12 +13,29 @@ let package = Package(
         )
     ],
     targets: [
+        .target(
+            name: "SlackmojiCore",
+            path: "Sources/SlackmojiCore"
+        ),
         .executableTarget(
             name: "SlackmojiEverywhere",
+            dependencies: [
+                "SlackmojiCore"
+            ],
             path: "Sources",
+            exclude: [
+                "SlackmojiCore"
+            ],
             resources: [
                 .process("Resources")
             ]
+        ),
+        .testTarget(
+            name: "SlackmojiCoreTests",
+            dependencies: [
+                "SlackmojiCore"
+            ],
+            path: "Tests/SlackmojiCoreTests"
         )
     ]
 )
